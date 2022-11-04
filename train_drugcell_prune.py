@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import util
 from util import *
-from drugcell_NN import *
+from drugcell_NN import drugcell_nn
 import argparse
 import gc
 
@@ -26,7 +26,7 @@ def create_term_mask(term_direct_gene_map, gene_dim):
         for i, gene_id in enumerate(gene_set):
             mask[i, gene_id] = 1
 
-        mask_gpu = torch.autograd.Variable(mask.cuda(CUDA_ID))
+        mask_gpu = torch.autograd.Variable(mask.to(DEVICE))
 
         term_mask_map[term] = mask_gpu
 
@@ -267,7 +267,8 @@ def grad_hook_masking(grad, mask):
     #return grad.mul_(mask)
 
 # train a DrugCell model 
-def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, gene_dim, drug_dim, model_save_folder, train_epochs, batch_size, learning_rate, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features):
+def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, gene_dim, drug_dim, model_save_folder,
+                train_epochs, batch_size, learning_rate, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features):
 
     '''
     # arguments:
@@ -300,8 +301,8 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     train_feature, train_label, test_feature, test_label = train_data
 
     # copy labels (observation) to GPU - will be used to
-    train_label_gpu = torch.autograd.Variable(train_label.cuda(CUDA_ID))
-    test_label_gpu = torch.autograd.Variable(test_label.cuda(CUDA_ID))
+    train_label_gpu = torch.autograd.Variable(train_label.to(DEVICE))
+    test_label_gpu = torch.autograd.Variable(test_label.to(DEVICE))
     
     # create dataloader for training/test data
     train_loader = du.DataLoader(du.TensorDataset(train_feature,train_label), batch_size=batch_size, shuffle=False)
@@ -315,7 +316,7 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     model = drugcell_nn(term_size_map, term_direct_gene_map, dG, gene_dim, drug_dim, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, CUDA_ID)
     
     # load model to GPU
-    model.cuda(CUDA_ID)
+    model = model.to(DEVICE)
 
     # define optimizer
     # optimize drug NN
@@ -325,7 +326,7 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     # load pretrain model
     if os.path.isfile(pretrained_model):
         print("Pre-trained model exists:" + pretrained_model)
-        model.load_state_dict(torch.load(pretrained_model,map_location=torch.device('cuda', CUDA_ID))) #param_file
+        model.load_state_dict(torch.load(pretrained_model, map_location=DEVICE).state_dict()) #param_file
         #base_test_acc = test(model,val_loader,device)
     else:
         print("Pre-trained model does not exist, so before pruning we have to pre-train a model.")
@@ -357,10 +358,10 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
         for prune_epoch in range(10):
 	        #Train
             model.train()
-            train_predict = torch.zeros(0,0).cuda(CUDA_ID)
+            train_predict = torch.zeros(0,0).to(DEVICE)
 
             for i, (inputdata, labels) in enumerate(train_loader):
-                cuda_labels = torch.autograd.Variable(labels.cuda(CUDA_ID))
+                cuda_labels = torch.autograd.Variable(labels.to(DEVICE))
                 
 	            # Forward + Backward + Optimize
                 optimizer.zero_grad()  # zero the gradient buffer
@@ -368,8 +369,8 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
                 cuda_cell_features = build_input_vector(inputdata.narrow(1, 0, 1).tolist(), gene_dim, cuda_cells)
                 cuda_drug_features = build_input_vector(inputdata.narrow(1, 1, 1).tolist(), drug_dim, cuda_drugs)
                 
-                cuda_cell_features.cuda(CUDA_ID)
-                cuda_drug_features.cuda(CUDA_ID)
+                cuda_cell_features.to(DEVICE)
+                cuda_drug_features.to(DEVICE)
 
 	            # Here term_NN_out_map is a dictionary
                 aux_out_map, _ = model(cuda_cell_features, cuda_drug_features)
@@ -473,14 +474,14 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
             
             
             model.train()
-            train_predict = torch.zeros(0,0).cuda(CUDA_ID)
+            train_predict = torch.zeros(0,0).to(DEVICE)
             
             #print("check network before retrain:")
             #check_network(model, dGc, root)
 
-            best_acc = torch.tensor([0]).cuda(CUDA_ID)
+            best_acc = torch.tensor([0]).to(DEVICE)
             for i, (inputdata, labels) in enumerate(train_loader):
-                cuda_labels = torch.autograd.Variable(labels.cuda(CUDA_ID))
+                cuda_labels = torch.autograd.Variable(labels.to(DEVICE))
 
                 # Forward + Backward + Optimize
                 optimizer.zero_grad()  # zero the gradient buffer
@@ -488,8 +489,8 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
                 cuda_cell_features = build_input_vector(inputdata.narrow(1, 0, 1).tolist(), gene_dim, cuda_cells)
                 cuda_drug_features = build_input_vector(inputdata.narrow(1, 1, 1).tolist(), drug_dim, cuda_drugs)
                 
-                cuda_cell_features.cuda(CUDA_ID)
-                cuda_drug_features.cuda(CUDA_ID)
+                cuda_cell_features.to(DEVICE)
+                cuda_drug_features.to(DEVICE)
 
                 # Here term_NN_out_map is a dictionary
                 aux_out_map, _ = model(cuda_cell_features, cuda_drug_features)
@@ -563,7 +564,7 @@ parser.add_argument('-test', help='Validation dataset', type=str)
 parser.add_argument('-epoch', help='Training epochs for training', type=int, default=300)
 parser.add_argument('-lr', help='Learning rate', type=float, default=0.001)
 parser.add_argument('-batchsize', help='Batchsize', type=int, default=6000)
-parser.add_argument('-modeldir', help='Folder for trained models', type=str, default='MODEL/')
+parser.add_argument('-modeldir', help='Folder for trained models', type=str, default='model/')
 parser.add_argument('-cuda', help='Specify GPU', type=int, default=0)
 parser.add_argument('-gene2id', help='Gene to ID mapping file', type=str)
 parser.add_argument('-drug2id', help='Drug to ID mapping file', type=str)
@@ -614,6 +615,14 @@ pretrained_model = opt.pretrained_model
 
 
 CUDA_ID = opt.cuda
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda", CUDA_ID)
+elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
+
+print(f"Device type: {DEVICE.type}")
 
 #print(">>>>>>>>>>>>Original graph has %d nodes and %d edges" % (dG.number_of_nodes(), dG.number_of_edges()))
 train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, num_genes, drug_dim, opt.modeldir, opt.epoch, opt.batchsize, opt.lr, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features)
