@@ -25,7 +25,7 @@ def create_term_mask(term_direct_gene_map, gene_dim):
         for i, gene_id in enumerate(gene_set):
             mask[i, gene_id] = 1
 
-        mask_gpu = torch.autograd.Variable(mask.cuda(CUDA_ID))
+        mask_gpu = torch.autograd.Variable(mask.to(DEVICE))
 
         term_mask_map[term] = mask_gpu
 
@@ -65,16 +65,18 @@ def optimize_palm(model, dG, root, reg_l0, reg_glasso, reg_decay, lr=0.001, lip=
             # group lasso for
             term_name = name.split('_')[0]
             child = model.term_neighbor_map[term_name]
+            dim = 0
             for i in range(len(child)):
                 dim = model.num_hiddens_genotype
                 term_input = param.data[:,i*dim:(i+1)*dim]
                 term_input_grad = param.grad.data[:,i*dim:(i+1)*dim]
                 term_input_tmp = term_input - lip*term_input_grad
                 term_input_update = proximal_glasso_nonoverlap(term_input_tmp, reg_glasso)
-                param.data[:,i*dim.:(i+1)*dim] = term_input_update
+                param.data[:,i*dim:(i+1)*dim] = term_input_update
                 num_n0 = torch.count_nonzero(term_input_update)
                 if num_n0 == 0 :
                     dG_prune.remove_edge(term_name, child[i])
+            # TODO: What if the go term has no child? do we need to calculate the weight decay for it
             # weight decay for direct
             direct_input = param.data[:,len(child)*dim:]
             direct_input_grad = param.grad.data[:,len(child)*dim:]
@@ -118,21 +120,21 @@ def train_model(root, term_size_map, term_direct_gene_map, dG, train_data, gene_
     max_corr = 0
 
     # dcell neural network
-    model = drugcell_nn(term_size_map, term_direct_gene_map, dG, gene_dim, drug_dim, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, CUDA_ID)
+    model = drugcell_nn(term_size_map, term_direct_gene_map, dG, gene_dim, drug_dim, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, DEVICE)
 
     # separate the whole data into training and test data
     train_feature, train_label, test_feature, test_label = train_data
 
     # copy labels (observation) to GPU - will be used to 
-    train_label_gpu = torch.autograd.Variable(train_label.cuda(CUDA_ID))
-    test_label_gpu = torch.autograd.Variable(test_label.cuda(CUDA_ID))
+    train_label_gpu = torch.autograd.Variable(train_label.to(DEVICE))
+    test_label_gpu = torch.autograd.Variable(test_label.to(DEVICE))
 
     # create a torch objects containing input features for cell lines and drugs
     cuda_cells = torch.from_numpy(cell_features)
     cuda_drugs = torch.from_numpy(drug_features)
 
     # load model to GPU
-    model.cuda(CUDA_ID)
+    model = model.to(DEVICE)
 
     # define optimizer
     # optimize drug NN
@@ -158,11 +160,11 @@ def train_model(root, term_size_map, term_direct_gene_map, dG, train_data, gene_
 
 	#Train
         model.train()
-        train_predict = torch.zeros(0,0).cuda(CUDA_ID)
+        train_predict = torch.zeros(0,0).to(DEVICE)
 
         for i, (inputdata, labels) in enumerate(train_loader):
 
-            cuda_labels = torch.autograd.Variable(labels.cuda(CUDA_ID))
+            cuda_labels = torch.autograd.Variable(labels.to(DEVICE))
 
 	    # Forward + Backward + Optimize
             optimizer.zero_grad()  # zero the gradient buffer
@@ -194,9 +196,10 @@ def train_model(root, term_size_map, term_direct_gene_map, dG, train_data, gene_
                 term_name = name.split('_')[0]
                 #print(name, param.grad.data.size(), term_mask_map[term_name].size())
                 param.grad.data = torch.mul(param.grad.data, term_mask_map[term_name])
-            
-            optimize_palm(model, dG, root, reg_l0=0.0001, reg_glasso=0.0001, reg_decay=0.0001, lr=0.001, lip=0.001)
-            #optimizer.step()
+
+            #TODO: use palm gives errors currently
+            #optimize_palm(model, dG, root, reg_l0=torch.tensor(0.0001), reg_glasso=torch.tensor(0.0001), reg_decay=0.0001, lr=0.001, lip=0.001)
+            optimizer.step()
             print(i,total_loss)
 
         train_corr = spearman_corr(train_predict, train_label_gpu)
@@ -207,7 +210,7 @@ def train_model(root, term_size_map, term_direct_gene_map, dG, train_data, gene_
         #Test: random variables in training mode become static
         model.eval()
             
-        test_predict = torch.zeros(0,0).cuda(CUDA_ID)
+        test_predict = torch.zeros(0,0).to(DEVICE)
 
         for i, (inputdata, labels) in enumerate(test_loader):
             # Convert torch tensor to Variable
@@ -289,6 +292,13 @@ num_hiddens_final = opt.final_hiddens
 
 
 CUDA_ID = opt.cuda
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda", CUDA_ID)
+elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+    DEVICE = torch.device("mps")
+else:
+    DEVICE = torch.device("cpu")
 
+print(f"Device type: {DEVICE.type}")
 
 train_model(root, term_size_map, term_direct_gene_map, dG, train_data, num_genes, drug_dim, opt.modeldir, opt.epoch, opt.batchsize, opt.lr, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features)

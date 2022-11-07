@@ -11,6 +11,7 @@ from util import *
 from drugcell_NN import drugcell_nn
 import argparse
 import gc
+import time
 
 
 # build mask: matrix (nrows = number of relevant gene set, ncols = number all genes)
@@ -174,15 +175,15 @@ def training_acc(model, optimizer, train_loader, train_label_gpu, gene_dim, cuda
 def test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs, CUDA_ID):
     model.eval()
         
-    test_predict = torch.zeros(0,0).cuda(CUDA_ID)
+    test_predict = torch.zeros(0,0).to(DEVICE)
 
     for i, (inputdata, labels) in enumerate(test_loader):
         # Convert torch tensor to Variable
         cuda_cell_features = build_input_vector(inputdata.narrow(1, 0, 1).tolist(), gene_dim, cuda_cells)
         cuda_drug_features = build_input_vector(inputdata.narrow(1, 1, 1).tolist(), drug_dim, cuda_drugs)
 
-        cuda_cell_features.cuda(CUDA_ID)
-        cuda_drug_features.cuda(CUDA_ID)
+        cuda_cell_features.to(DEVICE)
+        cuda_drug_features.to(DEVICE)
 
         aux_out_map, _ = model(cuda_cell_features, cuda_drug_features)
 
@@ -215,7 +216,7 @@ def retrain(model, train_loader, train_label_gpu, gene_dim, cuda_cells, drug_dim
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(0.9, 0.99), eps=1e-05)
     for retain_epoch in range(1):
         model.train()
-        train_predict = torch.zeros(0,0).cuda(CUDA_ID)
+        train_predict = torch.zeros(0,0).to(DEVICE)
 
         best_acc = [0]
         for i, (inputdata, labels) in enumerate(train_loader):
@@ -254,7 +255,7 @@ def retrain(model, train_loader, train_label_gpu, gene_dim, cuda_cells, drug_dim
         print(">>>>>Retraining step %d: model test acc %f" % (retain_epoch, prune_test_corr))
         
         if retrain_test_corr > best_acc[-1]:
-            best_acc.append(accuracy)
+            best_acc.append(retrain_test_corr)
             torch.save(model.state_dict(), model_save_folder + 'prune_final/drugcell_retrain_lung_best'+str(epoch)+'_'+str(retain_epoch)+'.pkl')
             best_model = model.state_dict()
             
@@ -268,7 +269,8 @@ def grad_hook_masking(grad, mask):
 
 # train a DrugCell model 
 def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, gene_dim, drug_dim, model_save_folder,
-                train_epochs, batch_size, learning_rate, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features):
+                train_epochs, batch_size, learning_rate, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features,
+                num_prun_steps, num_retrain_steps):
 
     '''
     # arguments:
@@ -313,7 +315,7 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     cuda_drugs = torch.from_numpy(drug_features)
     
     # dcell neural network
-    model = drugcell_nn(term_size_map, term_direct_gene_map, dG, gene_dim, drug_dim, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, CUDA_ID)
+    model = drugcell_nn(term_size_map, term_direct_gene_map, dG, gene_dim, drug_dim, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, DEVICE)
     
     # load model to GPU
     model = model.to(DEVICE)
@@ -326,7 +328,9 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     # load pretrain model
     if os.path.isfile(pretrained_model):
         print("Pre-trained model exists:" + pretrained_model)
-        model.load_state_dict(torch.load(pretrained_model, map_location=DEVICE).state_dict()) #param_file
+        #model.load_state_dict(torch.load(pretrained_model, map_location=DEVICE).state_dict()) #param_file
+        model = torch.load(pretrained_model, map_location=DEVICE)
+        model.device = DEVICE
         #base_test_acc = test(model,val_loader,device)
     else:
         print("Pre-trained model does not exist, so before pruning we have to pre-train a model.")
@@ -355,7 +359,8 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
     for epoch in range(train_epochs):
 
         # prune step
-        for prune_epoch in range(10):
+        start_time = time.time()
+        for prune_epoch in range(num_prun_steps):
 	        #Train
             model.train()
             train_predict = torch.zeros(0,0).to(DEVICE)
@@ -368,9 +373,9 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
 
                 cuda_cell_features = build_input_vector(inputdata.narrow(1, 0, 1).tolist(), gene_dim, cuda_cells)
                 cuda_drug_features = build_input_vector(inputdata.narrow(1, 1, 1).tolist(), drug_dim, cuda_drugs)
-                
-                cuda_cell_features.to(DEVICE)
-                cuda_drug_features.to(DEVICE)
+
+                cuda_cell_features = cuda_cell_features.to(DEVICE)
+                cuda_drug_features = cuda_drug_features.to(DEVICE)
 
 	            # Here term_NN_out_map is a dictionary
                 aux_out_map, _ = model(cuda_cell_features, cuda_drug_features)
@@ -412,6 +417,10 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
             print(">>>>>%d epoch run Pruning step %d: model train acc %f test acc %f" % (epoch, prune_epoch, train_corr, prune_test_corr))
             del train_predict, prune_test_corr
             torch.cuda.empty_cache()
+        prune_duration = time.time() - start_time
+        print(f"=====")
+        print(f"Prune time: {prune_duration}s")
+        print(f"=====")
         
 
         # retraining step
@@ -446,8 +455,9 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
         
         #print("check network after optimizer:")
         #check_network(model, dGc, root)
-        
-        for retain_epoch in range(10):
+
+        start_time = time.time()
+        for retain_epoch in range(num_retrain_steps):
         
             #print("check network before train:")
             #check_network(model, dGc, root)
@@ -546,6 +556,12 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
                 
             #model.load_state_dict(best_model_para)
             #del best_model_para
+        retrain_duration = time.time() - start_time
+        print(f"=====")
+        print(f"Retrain time: {retrain_duration}s")
+        print(f"=====")
+        print(f"Total runtime for this epoch: {prune_duration + retrain_duration}")
+        print(f"=====")
             
     
 
@@ -625,4 +641,5 @@ else:
 print(f"Device type: {DEVICE.type}")
 
 #print(">>>>>>>>>>>>Original graph has %d nodes and %d edges" % (dG.number_of_nodes(), dG.number_of_edges()))
-train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, num_genes, drug_dim, opt.modeldir, opt.epoch, opt.batchsize, opt.lr, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features)
+train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG, train_data, num_genes, drug_dim, opt.modeldir, opt.epoch, opt.batchsize, opt.lr, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, cell_features, drug_features,
+            num_prun_steps=1, num_retrain_steps=1)

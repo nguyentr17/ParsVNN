@@ -12,7 +12,7 @@ from util import *
 
 class drugcell_nn(nn.Module):
 
-    def __init__(self, term_size_map, term_direct_gene_map, dG, ngene, ndrug, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, CUDA_ID):
+    def __init__(self, term_size_map, term_direct_gene_map, dG, ngene, ndrug, root, num_hiddens_genotype, num_hiddens_drug, num_hiddens_final, device):
     
         super(drugcell_nn, self).__init__()
 
@@ -37,7 +37,7 @@ class drugcell_nn(nn.Module):
         # add modules for neural networks to process drugs  
         self.construct_NN_drug()
 
-        self.CUDA_ID = CUDA_ID
+        self.device = device
 
         # add modules for final layer
         final_input_size = num_hiddens_genotype + num_hiddens_drug[-1]
@@ -134,7 +134,7 @@ class drugcell_nn(nn.Module):
     # definition of forward function
     def forward(self, cuda_cell_features, cuda_drug_features):
 
-        gene_input = Variable(cuda_cell_features.cuda(self.CUDA_ID))
+        gene_input = Variable(cuda_cell_features.to(self.device))
 
         # define forward function for genotype dcell #############################################
         term_gene_out_map = {}
@@ -172,7 +172,7 @@ class drugcell_nn(nn.Module):
 
         # define forward function for drug dcell #################################################
 
-        drug_out = Variable( cuda_drug_features.cuda(self.CUDA_ID) )
+        drug_out = Variable( cuda_drug_features.to(self.device) )
 
         for i in range(1, len(self.num_hiddens_drug)+1, 1):
             drug_out = self._modules['drug_batchnorm_layer_'+str(i)]( torch.tanh(self._modules['drug_linear_layer_' + str(i)](drug_out)))
