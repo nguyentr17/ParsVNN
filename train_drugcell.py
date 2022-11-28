@@ -10,6 +10,7 @@ import util
 from util import *
 from drugcell_NN import *
 import argparse
+import pickle
 
 
 # build mask: matrix (nrows = number of relevant gene set, ncols = number all genes)
@@ -268,8 +269,12 @@ torch.set_printoptions(precision=3)
 train_data, cell2id_mapping, drug2id_mapping = prepare_train_data(opt.train, opt.test, opt.cell2id, opt.drug2id)
 gene2id_mapping = load_mapping(opt.gene2id)
 print('Total number of genes = %d' % len(gene2id_mapping))
+lung_genes = pickle.load(open("data/identified_genes.pickle", "rb"))["LUNG"]
+gene2id_mapping = {k: v for k, v in gene2id_mapping.items() if k in lung_genes}
+print("Total number of lung genes = %d" % len(gene2id_mapping))
 
 cell_features = np.genfromtxt(opt.cellline, delimiter=',')
+cell_features = cell_features.take(list(gene2id_mapping.values()), axis=1)
 drug_features = np.genfromtxt(opt.fingerprint, delimiter=',')
 
 num_cells = len(cell2id_mapping)

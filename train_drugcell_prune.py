@@ -172,7 +172,7 @@ def training_acc(model, optimizer, train_loader, train_label_gpu, gene_dim, cuda
     print("pretrained model %f total loss, %f training acc" % (total_loss, train_corr))
         
         
-def test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs, CUDA_ID):
+def test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs):
     model.eval()
         
     test_predict = torch.zeros(0,0).to(DEVICE)
@@ -413,7 +413,7 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
             torch.cuda.empty_cache()
 
             train_corr = spearman_corr(train_predict, train_label_gpu)
-            prune_test_corr = test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs, CUDA_ID)
+            prune_test_corr = test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs)
             print(">>>>>%d epoch run Pruning step %d: model train acc %f test acc %f" % (epoch, prune_epoch, train_corr, prune_test_corr))
             del train_predict, prune_test_corr
             torch.cuda.empty_cache()
@@ -540,13 +540,13 @@ def train_model(pretrained_model, root, term_size_map, term_direct_gene_map, dG,
             torch.cuda.empty_cache()
             
             train_corr = spearman_corr(train_predict, train_label_gpu)
-            retrain_test_corr = test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs, CUDA_ID)
+            retrain_test_corr = test_acc(model, test_loader, test_label_gpu, gene_dim, cuda_cells, drug_dim, cuda_drugs)
             print(">>>>>%d epoch Retraining step %d: model training acc %f test acc %f" % (epoch, retain_epoch, train_corr, retrain_test_corr))
             
             # save models
-            if epoch > 30:
+            if epoch > 5:
                 NumNode_left, NumEdge_left = check_network(model, dGc, root)
-                torch.save(model.state_dict(), model_save_folder + 'prune_final/drugcell_retrain_lung_gl_0.5_epoch_'+str(epoch)+'_trainacc_'+str(train_corr)+'_testacc_'+str(retrain_test_corr)+'_nodeleft_'+str(NumNode_left)+'_edgeleft_'+str(NumEdge_left)+'.pkl')
+                torch.save(model.state_dict(), model_save_folder + '/prune_final/drugcell_retrain_lung_gl_0.5_epoch_'+str(epoch)+'_trainacc_'+str(train_corr)+'_testacc_'+str(retrain_test_corr)+'_nodeleft_'+str(NumNode_left)+'_edgeleft_'+str(NumEdge_left)+'.pkl')
             
             #if retrain_test_corr > best_acc:
             #    best_acc = retrain_test_corr
